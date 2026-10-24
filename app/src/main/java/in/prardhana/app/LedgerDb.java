@@ -21,6 +21,8 @@ final class LedgerDb extends SQLiteOpenHelper {
         db.execSQL("CREATE TABLE meta(key TEXT PRIMARY KEY,value TEXT NOT NULL)");
     }
     @Override public void onUpgrade(SQLiteDatabase db,int old,int next){throw new IllegalStateException("Unsupported ledger version");}
+    // Added after v1 shipped; idempotent, so existing ledgers gain it without a schema version change.
+    @Override public void onOpen(SQLiteDatabase db){if(!db.isReadOnly())db.execSQL("CREATE INDEX IF NOT EXISTS movement_body ON movements(bodyHash)");}
     private void migrate(Context c){
         SQLiteDatabase db=getWritableDatabase();try(Cursor cur=db.rawQuery("SELECT value FROM meta WHERE key='legacy_migrated'",null)){if(cur.moveToFirst()){Store.prefs(c).edit().remove("transactions").remove("financial_events").commit();return;}}
         db.beginTransaction();try{
@@ -45,6 +47,11 @@ final class LedgerDb extends SQLiteOpenHelper {
     void mergeInto(JSONObject from,String to){SQLiteDatabase db=getWritableDatabase();String id=from.optString("id");ContentValues v=new ContentValues();v.put("movement",to);db.update("evidence",v,"movement=?",new String[]{id});alias(from.optString("fingerprint"),to);alias(from.optString("canonical"),to);db.delete("movements","id=?",new String[]{id});}
     /** Drops evidence merged into a row other than its own message, so those messages are imported again. */
     void unalias(JSONObject row){getWritableDatabase().delete("evidence","movement=? AND hash NOT IN (?,?)",new String[]{row.optString("id"),row.optString("fingerprint"),row.optString("canonical")});}
+    /**
+     * The movement recorded from the same message body nearest in time, or null. Two SMS rows never match each other:
+     * their network timestamps already distinguish two genuine identical payments.
+     */
+    JSONObject byBody(String bodyHash,long time,long window,boolean fromSms){if(bodyHash.isEmpty())return null;try(Cursor cur=getReadableDatabase().rawQuery("SELECT data FROM movements WHERE bodyHash=? AND time BETWEEN ? AND ?"+(fromSms?" AND source!='sms'":"")+" ORDER BY ABS(time-?) LIMIT 1",new String[]{bodyHash,String.valueOf(time-window),String.valueOf(time+window),String.valueOf(time)})){return cur.moveToFirst()?object(cur.getString(0)):null;}}
     JSONArray near(long amount,String direction,long from,long to){JSONArray a=new JSONArray();try(Cursor cur=getReadableDatabase().rawQuery("SELECT data FROM movements WHERE amount=? AND direction=? AND time BETWEEN ? AND ?",new String[]{String.valueOf(amount),direction,String.valueOf(from),String.valueOf(to)})){while(cur.moveToNext())a.put(object(cur.getString(0)));}return a;}
     static void put(SQLiteDatabase db,JSONObject r){ContentValues v=new ContentValues();v.put("id",r.optString("id"));v.put("time",r.optLong("time"));v.put("amount",r.optLong("paise"));for(String k:new String[]{"direction","reference","source","issuer","account","fingerprint","canonical","bodyHash","category","merchant"})v.put(k,r.optString(k));v.put("reviewed",r.optBoolean("reviewed")?1:0);v.put("data",r.toString());if(db.insertWithOnConflict("movements",null,v,SQLiteDatabase.CONFLICT_REPLACE)==-1)throw new IllegalStateException("Ledger write failed");}
     void put(JSONObject r){put(getWritableDatabase(),r);}

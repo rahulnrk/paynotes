@@ -1,5 +1,7 @@
 package in.prardhana.app;
+import android.Manifest;
 import android.app.Notification;
+import android.content.pm.PackageManager;
 import android.service.notification.*;
 
 public class CaptureService extends NotificationListenerService {
@@ -21,12 +23,17 @@ public class CaptureService extends NotificationListenerService {
         capture(event);
     }
     private String capture(StatusBarNotification event) {
-        if (event.getPackageName().equals(getPackageName()) || !Store.prefs(this).getBoolean("capture",false)) return "Ignored";
+        String pkg=event.getPackageName();
+        if (pkg.equals(getPackageName()) || !Store.prefs(this).getBoolean("capture",false)) return "Ignored";
         Notification n=event.getNotification();
         if ((n.flags & Notification.FLAG_GROUP_SUMMARY)!=0) return "Ignored";
         String title=String.valueOf(n.extras.getCharSequence(Notification.EXTRA_TITLE,""));
         CharSequence big=n.extras.getCharSequence(Notification.EXTRA_BIG_TEXT);
         String body=String.valueOf(big!=null?big:n.extras.getCharSequence(Notification.EXTRA_TEXT,""));
-        synchronized(Store.class){if(!Store.prefs(this).getBoolean("capture",false))return "Ignored";PatternLab.observeNotification(this,title+"\n"+body);return Store.capture(this,title+"\n"+body,event.getPackageName(),event.getPostTime(),SourcePolicy.smsApp(event.getPackageName())?title:null,0);}
+        boolean liveSms=Store.prefs(this).getBoolean("sms_capture",false)&&checkSelfPermission(Manifest.permission.RECEIVE_SMS)==PackageManager.PERMISSION_GRANTED;
+        // Disallowed apps are dropped before their text reaches events, diagnostics or the pattern lab.
+        SourcePolicy.Notice notice=SourcePolicy.notice(pkg,title,body,liveSms);
+        if(notice==null)return "Ignored";
+        synchronized(Store.class){if(!Store.prefs(this).getBoolean("capture",false))return "Ignored";PatternLab.observeNotification(this,notice.text());return Store.capture(this,notice.text(),pkg,event.getPostTime(),notice.sender(),0);}
     }
 }

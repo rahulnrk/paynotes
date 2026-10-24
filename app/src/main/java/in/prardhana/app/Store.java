@@ -10,6 +10,8 @@ final class Store {
     static synchronized JSONArray rows(Context c) { return LedgerDb.get(c).rows(); }
     static synchronized String capture(Context c,String text,String source,long time){return capture(c,text,source,time,null,0);}
     static synchronized String capture(Context c,String text,String source,long time,String sender,long sentAt){
+        // A disallowed source leaves no trace: no event, no diagnostic pattern, no movement.
+        if(!SourcePolicy.allowed(source))return "No completed transaction found. This app is not a supported payment source.";
         FinancialEvents.observe(c,text,sender,source,time,sentAt);
         TransactionParser.Parsed p=SourcePolicy.parse(text,sender,source);
         Learning.observe(c,text,sender,p,canonical(text,source,sender,sentAt).isEmpty()?fingerprint(text,time):canonical(text,source,sender,sentAt));
@@ -18,11 +20,14 @@ final class Store {
             String hash=fingerprint(text,time),canonical=canonical(text,source,sender,sentAt);
             LedgerDb db=LedgerDb.get(c);JSONObject facts=new JSONObject().put("source",source).put("time",time);
             FinancialEvents.facts(facts,text,sentAt,sender);facts.put("shape",MessagePatterns.shape(text));if(!Issuer.fromSender(sender).isEmpty())facts.put("issuer",Issuer.fromSender(sender));
+            String body=bodyKey(text,source);if(!body.isEmpty())facts.put("bodyHash",body);
             JSONObject row=db.byHash(hash);if(row==null&&!canonical.isEmpty())row=db.byHash(canonical);
             if(row==null)row=referenceMatch(db,p,facts);
             boolean paired=false;if(row==null){row=pairedAlert(db,p,facts);paired=row!=null;}
+            boolean copy=false;if(row==null){row=db.byBody(body,time,COPY_WINDOW,source.equals("sms"));copy=row!=null;}
             if(row!=null){
                 if(paired){if(!row.optBoolean("reviewed")&&row.optString("format").equals("core-ledger"))applyParsed(c,row,p);row.put("paired",true);db.put(row);}
+                else if(copy&&source.equals("sms")&&!row.optString("source").equals("sms")){smsReplacesNotification(c,row,p,text,sentAt,sender,canonical);db.put(row);}
                 else if(!row.optBoolean("reviewed")&&row.optString("merchant").equals("Unknown merchant")&&!p.merchant().equals("Unknown merchant")&&!p.reference().isEmpty()){applyParsed(c,row,p);row.put("nameSource","Matched payment reference");db.put(row);}
                 db.alias(hash,row.optString("id"));db.alias(canonical,row.optString("id"));
                 prefs(c).edit().putInt("duplicates",prefs(c).getInt("duplicates",0)+1).apply();return "Duplicate ignored";
@@ -33,6 +38,18 @@ final class Store {
         }catch(JSONException e){throw new IllegalStateException(e);}
     }
     static String canonical(String text,String source,String sender,long sentAt){return source.equals("sms")&&sentAt>0?fingerprint((sender==null?"":sender.toUpperCase(Locale.ROOT))+"|"+text.replaceAll("\\s+"," ").trim(),sentAt):"";}
+    static final long COPY_WINDOW=10*60*1000L;
+    /**
+     * The same bank SMS can arrive twice: from the SMS receiver or inbox and as an SMS-app notification, with different
+     * timestamps and no shared reference (UCO, IDFC, card spends). Its normalised body, within minutes, identifies one movement.
+     */
+    static String bodyKey(String text,String source){return !text.isBlank()&&(source.equals("sms")||SourcePolicy.smsApp(source))?fingerprint(text.replaceAll("\\s+"," ").trim(),0):"";}
+    /** The SMS carries the real sender and network time, so it becomes the record; reviewed edits stay. */
+    private static void smsReplacesNotification(Context c,JSONObject row,TransactionParser.Parsed p,String text,long sentAt,String sender,String canonical)throws JSONException{
+        if(!row.optBoolean("reviewed"))applyParsed(c,row,p);
+        row.put("source","sms").put("canonical",canonical).put("bodyHash",bodyKey(text,"sms"));FinancialEvents.facts(row,text,sentAt,sender);
+        if(!Issuer.fromSender(sender).isEmpty())row.put("issuer",Issuer.fromSender(sender));
+    }
     private static JSONObject referenceMatch(LedgerDb db,TransactionParser.Parsed p,JSONObject facts){
         if(p.reference().isEmpty())return null;JSONArray candidates=db.byReference(p.reference(),p.paise(),p.direction());JSONObject match=null;boolean upi=p.reference().matches("[0-9]{12}");
         for(int i=0;i<candidates.length();i++){JSONObject r=candidates.optJSONObject(i);if(p.category().equals("Payment receipt")!=r.optString("category").equals("Payment receipt"))continue;
@@ -109,12 +126,15 @@ final class Store {
                 TransactionParser.Parsed p=candidate.parsed;
                 if(p==null){if(row!=null&&!row.optBoolean("reviewed")){if(!row.optString("category").equals("Not a transaction"))refreshed++;row.put("category","Not a transaction");db.put(row);excluded++;}continue;}
                 JSONObject facts=new JSONObject().put("time",candidate.time).put("source","sms");if(!candidate.text.isEmpty()){FinancialEvents.facts(facts,candidate.text,candidate.sentAt,candidate.sender);facts.put("shape",MessagePatterns.shape(candidate.text));if(!Issuer.fromSender(candidate.sender).isEmpty())facts.put("issuer",Issuer.fromSender(candidate.sender));}
+                String body=bodyKey(candidate.text,"sms");if(!body.isEmpty())facts.put("bodyHash",body);
                 if(row==null)row=referenceMatch(db,p,facts);
                 boolean paired=false;if(row==null){row=pairedAlert(db,p,facts);paired=row!=null;}
+                boolean copy=false;if(row==null){row=db.byBody(body,candidate.time,COPY_WINDOW,true);copy=row!=null;}
                 if(row!=null){duplicates++;String before=row.toString();
                     // Never let a branch-ledger copy overwrite the richer UPI alert it was paired with.
                     if(!(p.format().equals("core-ledger")&&!row.optString("format").equals("core-ledger")))applyParsed(c,row,p);if(paired)row.put("paired",true);
-                    if(row.optString("fingerprint").equals(candidate.fingerprint)&&!candidate.text.isEmpty()){FinancialEvents.facts(row,candidate.text,candidate.sentAt,candidate.sender);row.put("canonical",canonical);}
+                    if(copy&&!row.optString("source").equals("sms"))smsReplacesNotification(c,row,p,candidate.text,candidate.sentAt,candidate.sender,canonical);
+                    if(row.optString("fingerprint").equals(candidate.fingerprint)&&!candidate.text.isEmpty()){FinancialEvents.facts(row,candidate.text,candidate.sentAt,candidate.sender);row.put("canonical",canonical).put("bodyHash",body);}
                     if(!before.equals(row.toString())){db.put(row);refreshed++;}db.alias(candidate.fingerprint,row.optString("id"));db.alias(canonical,row.optString("id"));continue;}
                 row=facts.put("id",UUID.randomUUID().toString()).put("fingerprint",candidate.fingerprint).put("canonical",canonical).put("reviewed",false);applyParsed(c,row,p);db.put(row);added++;
             }

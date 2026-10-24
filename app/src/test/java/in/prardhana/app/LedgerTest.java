@@ -103,6 +103,42 @@ public class LedgerTest {
  @Test public void notificationCreditsRequireSupportedSource(){
   assertNull(SourcePolicy.parse("INR 500 credited to your account",null,"com.unknown.app"));assertNotNull(SourcePolicy.parse("INR 500 credited to your account","AD-IDFCFB-S","com.google.android.apps.messaging"));
  }
+ static final String MESSAGES="com.google.android.apps.messaging",UCO_ALERT="A/c XX1234 Debited with Rs.250.00 on 24-10-26 by UCO-UPI.Avl Bal Rs.900.00 Report Dispute https://example.invalid/d";
+ @Test public void notificationsFromChatAndUnknownAppsNeverCreateMoney(){
+  String chat="Paid Rs 500 to Ravi ref 512345678901";
+  assertNull("chat app",SourcePolicy.notice("com.whatsapp","Ravi",chat,false));assertNull(SourcePolicy.parse(chat,null,"com.whatsapp"));
+  assertNull("unknown app",SourcePolicy.notice("com.example.shop","Order paid",chat,false));
+  assertEquals("UPI app","Payment sent\nPaid Rs 500 to Ravi",SourcePolicy.notice("com.phonepe.app","Payment sent","Paid Rs 500 to Ravi",false).text());
+  assertNotNull(SourcePolicy.parse("Paid Rs 500 to Ravi ref 512345678901",null,"com.phonepe.app"));
+  assertNull("contact name in an SMS app is a person",SourcePolicy.notice(MESSAGES,"Ravi Kumar",UCO_ALERT,false));
+  assertNull("phone number",SourcePolicy.notice(MESSAGES,"+91 98765 43210",UCO_ALERT,false));
+  assertNull("six capital letters that are not a bank header",SourcePolicy.notice(MESSAGES,"RAJESH",UCO_ALERT,false));
+  SourcePolicy.Notice bank=SourcePolicy.notice(MESSAGES,"JD-UCOBNK-S",UCO_ALERT,false);assertEquals("body only",UCO_ALERT,bank.text());assertEquals("JD-UCOBNK-S",bank.sender());
+  assertEquals("bare bank header","XX-UCOBNK",SourcePolicy.notice(MESSAGES,"UCOBNK",UCO_ALERT,false).sender());
+  assertNull("live SMS capture already records it",SourcePolicy.notice(MESSAGES,"JD-UCOBNK-S",UCO_ALERT,true));
+  assertNull("promotional header",SourcePolicy.parse("Paid Rs 500 to Ravi","VM-OFFERS-P",MESSAGES));
+  // Disallowed sources leave no trace: no transaction and no event.
+  assertTrue(Store.capture(c,"Your EMI of Rs 5000 is due on 30-10-2026. "+chat,"com.whatsapp",1000).startsWith("No completed"));assertEquals(0,Store.rows(c).length());assertEquals(0,FinancialEvents.rows(c).length());
+ }
+ @Test public void smsAppNotificationThenSmsIsOneMovement()throws Exception{
+  long t=1_800_000_000_000L;
+  assertTrue(Store.capture(c,UCO_ALERT,MESSAGES,t,"JD-UCOBNK-S",0).startsWith("Transaction added"));
+  assertEquals("Duplicate ignored",Store.capture(c,UCO_ALERT,"sms",t+2000,"JD-UCOBNK-S",t+1000));
+  assertEquals(1,Store.rows(c).length());JSONObject row=Store.rows(c).getJSONObject(0);assertEquals("SMS becomes the record","sms",row.getString("source"));assertFalse(row.getString("canonical").isEmpty());assertEquals("UCO",row.getString("issuer"));
+  var later=new Store.Candidate(TransactionParser.parse(UCO_ALERT,"JD-UCOBNK-S"),Store.fingerprint(UCO_ALERT,t+5000),t+5000,UCO_ALERT,t+1000,"JD-UCOBNK-S");
+  assertEquals(0,Store.importBatch(c,List.of(later),0).added());assertEquals(1,Store.rows(c).length());
+ }
+ @Test public void importedSmsThenActiveNotificationIsOneMovement()throws Exception{
+  long t=1_800_000_000_000L;
+  var sms=new Store.Candidate(TransactionParser.parse(UCO_ALERT,"JD-UCOBNK-S"),Store.fingerprint(UCO_ALERT,t),t,UCO_ALERT,t-500,"JD-UCOBNK-S");
+  assertEquals(1,Store.importBatch(c,List.of(sms),0).added());
+  assertEquals("Duplicate ignored",Store.capture(c,UCO_ALERT,MESSAGES,t+1500,"JD-UCOBNK-S",0));assertEquals(1,Store.rows(c).length());assertEquals("sms",Store.rows(c).getJSONObject(0).getString("source"));
+  // A different alert (new balance) is a different payment, even for the same amount minutes later.
+  String next=UCO_ALERT.replace("Rs.900.00","Rs.650.00");assertTrue(Store.capture(c,next,MESSAGES,t+120000,"JD-UCOBNK-S",0).startsWith("Transaction added"));
+  // The same body far apart in time is not merged.
+  assertTrue(Store.capture(c,UCO_ALERT,MESSAGES,t+COPY_GAP,"JD-UCOBNK-S",0).startsWith("Transaction added"));assertEquals(3,Store.rows(c).length());
+ }
+ static final long COPY_GAP=Store.COPY_WINDOW+60_000;
 
  @Test public void snapshotContractAndHttpsPolicy()throws Exception{
   Store.prefs(c).edit().putBoolean("pilot_consent",true).commit();Learning.observe(c,"IDFC A/c XX1234 debited INR 100 to Alice ref SECRET123456","AX-IDFCFB-S",TransactionParser.parse("Paid INR 100 to Alice"),"fixture-observation");JSONObject payload=Learning.snapshot(c);java.nio.file.Path directory=java.nio.file.Path.of(System.getProperty("pilot.testArtifacts"));java.nio.file.Files.createDirectories(directory);java.nio.file.Files.write(directory.resolve("android-snapshot.json"),payload.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));assertFalse(payload.toString().contains("Alice"));assertFalse(payload.toString().contains("SECRET"));
