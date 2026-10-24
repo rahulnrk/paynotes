@@ -1,0 +1,26 @@
+plugins { id 'com.android.application' }
+android {
+    namespace 'in.prardhana.app'
+    compileSdk 35
+    buildFeatures { buildConfig true }
+    defaultConfig { applicationId 'in.prardhana.app'; minSdk 26; targetSdk 35; versionCode 7; versionName '0.6.1' }
+    defaultConfig { testInstrumentationRunner providers.gradleProperty('pilotRunner').getOrElse('in.prardhana.app.PilotInstrumentation') }
+    compileOptions { coreLibraryDesugaringEnabled true; sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }
+    testOptions { unitTests.returnDefaultValues = true; unitTests.all { systemProperty 'pilot.testArtifacts', rootProject.file('artifacts/v06-tests').absolutePath } }
+}
+dependencies {
+    coreLibraryDesugaring 'com.android.tools:desugar_jdk_libs:2.1.5'
+    testImplementation 'junit:junit:4.13.2'
+    testImplementation 'org.robolectric:robolectric:4.14.1'
+}
+
+// Publish metadata only alongside the successfully assembled development APK.
+tasks.register('writePilotManifest') {
+    doLast {
+        def source = file('src/main/java/in/prardhana/app/TransactionParser.java').getText('UTF-8')
+        def parser = (source =~ /VERSION\s*=\s*(\d+)/)[0][1].toInteger()
+        def destination = file("$buildDir/outputs/apk/debug/release.json")
+        destination.text = groovy.json.JsonOutput.toJson([versionCode:android.defaultConfig.versionCode, versionName:android.defaultConfig.versionName, parserVersion:parser])
+    }
+}
+tasks.matching { it.name == 'assembleDebug' }.configureEach { finalizedBy 'writePilotManifest' }
