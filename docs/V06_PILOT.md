@@ -38,7 +38,7 @@ Vercel's local filesystem cannot persist this SQLite service reliably across ser
 
 ## Tester installation without USB
 
-1. Give the tester the APK, or have them download `/v1/app.apk` from the HTTPS service. Android must allow installation from that browser/file app. Keep the existing signing key for updates.
+1. Give the tester the **release** APK (`app-release.apk`, see README "Build and install"), or have them download `/v1/app.apk` from the HTTPS service, which serves only the signed release. Android must allow installation from that browser/file app. Every update must be signed with the same release key. A phone that has an older debug-signed build must uninstall it once first; this removes its local data.
 2. Enable SMS and/or notification capture through the app's disclosures and Android settings. Import received history on the phone; nothing requires exporting its inbox.
 3. Optional: Settings → Join development pilot / sync. Enter the HTTPS origin and enrollment code, read the disclosure, agree and Join.
 4. Preview the shared payload. It contains app/parser versions, cumulative counts, permission/connectivity booleans and at most 100 masked grammar summaries with registered six-character business sender codes (e.g. IDFCFB). Personal phone numbers and contacts are excluded. Arbitrary words/numbers are rejected by the server. It excludes amounts, merchant names, account data, references, raw SMS, notification bodies, OTPs and personal contact data.

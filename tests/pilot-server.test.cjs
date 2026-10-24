@@ -3,11 +3,18 @@ const assert=require('node:assert/strict'),fs=require('node:fs'),os=require('nod
 const {createPilot}=require('../server/pilot.cjs');
 (async()=>{
  const dataDir=fs.mkdtempSync(path.join(os.tmpdir(),'prardhana-api-test-'));
- const app=createPilot({dataDir,adminToken:'test-admin-secret-abcdefghijklmnopqrstuvwxyz',enrollCode:'test-enrollment-123456'});
+ const apkDir=fs.mkdtempSync(path.join(os.tmpdir(),'prardhana-apk-test-'));
+ const app=createPilot({dataDir,apkDir,adminToken:'test-admin-secret-abcdefghijklmnopqrstuvwxyz',enrollCode:'test-enrollment-123456'});
  await new Promise(r=>app.server.listen(0,'127.0.0.1',r));const base='http://127.0.0.1:'+app.server.address().port;
  const request=async(route,method='GET',body,token)=>{const r=await fetch(base+route,{method,headers:{'Content-Type':'application/json',...(token?{Authorization:'Bearer '+token}:{})},body:body===undefined?undefined:JSON.stringify(body)});return {status:r.status,body:await r.json()};};
  try{
   assert.equal((await request('/health')).status,200);
+  // No signed release built yet: nothing to download, and a debug APK is never offered.
+  assert.equal((await request('/v1/release')).body.sha256,null);assert.equal((await fetch(base+'/v1/app.apk')).status,404);
+  fs.writeFileSync(path.join(apkDir,'app-debug.apk'),'debug build');assert.equal((await fetch(base+'/v1/app.apk')).status,404);
+  fs.writeFileSync(path.join(apkDir,'app-release.apk'),'signed release');fs.writeFileSync(path.join(apkDir,'release.json'),JSON.stringify({versionCode:7,versionName:'0.6.1',parserVersion:7}));
+  const rel=(await request('/v1/release')).body;assert.equal(rel.versionCode,7);assert.equal(rel.sha256,require('node:crypto').createHash('sha256').update('signed release').digest('hex'));
+  const download=await fetch(base+'/v1/app.apk');assert.equal(download.status,200);assert.equal(await download.text(),'signed release');
   assert.equal((await request('/v1/admin/overview')).status,401);
   assert.equal((await request('/v1/enroll','POST',{code:'wrong'})).status,401);
   const enrollment=await request('/v1/enroll','POST',{code:'test-enrollment-123456'});assert.equal(enrollment.status,201);const {token,installation}=enrollment.body;
@@ -34,5 +41,5 @@ const {createPilot}=require('../server/pilot.cjs');
   assert.equal((await request('/v1/me','DELETE',undefined,token)).status,200);assert.equal((await request('/v1/status','GET',undefined,token)).status,401);
   overview=await request('/v1/admin/overview','GET',undefined,app.secrets.adminToken);assert.equal(overview.body.snapshots.length,0);assert.equal(overview.body.reports.length,0);
   console.log('Pilot API passed: enrollment, auth isolation, privacy validation, idempotency, stale snapshots, triage, deletion.');
- }finally{await new Promise(r=>app.server.close(r));app.db.close();fs.rmSync(dataDir,{recursive:true,force:true});}
+ }finally{await new Promise(r=>app.server.close(r));app.db.close();fs.rmSync(dataDir,{recursive:true,force:true});fs.rmSync(apkDir,{recursive:true,force:true});}
 })().catch(e=>{console.error(e);process.exitCode=1;});

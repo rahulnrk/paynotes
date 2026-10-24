@@ -6,9 +6,21 @@ Transactions now live in indexed SQLite. Legacy preferences migrate with reviewe
 
 ## Build and install
 
-Use JDK 17 and Android SDK 35. Set ANDROID_HOME then run `./gradlew.bat assembleDebug`.
+Use JDK 17 and Android SDK 35. Set ANDROID_HOME, then:
 
-APK: `app/build/outputs/apk/debug/app-debug.apk`. Share it directly or download `/v1/app.apk` from the pilot service. Use Android's normal install/update flow and keep the same signing key; USB is unnecessary.
+- **Testers:** `./gradlew.bat assembleRelease` → `app/build/outputs/apk/release/app-release.apk`. It is not debuggable, so `adb run-as` cannot copy a tester's ledger, and it is signed with the project release key. The pilot service offers only this file at `/v1/app.apk` (with its SHA-256 at `/v1/release`). It never serves a debug build. Share it directly or let testers download it; USB is unnecessary.
+- **Development only:** `./gradlew.bat assembleDebug` → `app/build/outputs/apk/debug/app-debug.apk` (debuggable, laptop debug key). Never give this to testers.
+
+**Release key.** `keystore.properties` in the project root (git-ignored) points to the keystore and holds its passwords:
+```
+storeFile=C:/Users/<you>/.prardhana/signing/prardhana-release.jks
+storePassword=…
+keyAlias=prardhana
+keyPassword=…
+```
+Without this file the release APK is built unsigned and the pilot service has nothing to offer. **Back up the keystore and `keystore.properties` together, offline.** Every future update must be signed with the same key; if it is lost, testers must uninstall and lose local data. Keep both out of chat, email and cloud folders that others can read.
+
+**Switching a phone from a debug build.** Android refuses to update an app signed with a different key. Phones that have the old debug-signed build must uninstall it once before installing the release: local transactions, reviews and settings are removed. Re-importing SMS restores transactions but not reviews. Delete shared pilot data in the app first if the phone had joined the pilot.
 
 In Settings, enable SMS and/or notification capture after the disclosure and Android permission prompt. Import received history on the phone. Review transaction details and inspect Recurring payments, financial events and last bank-reported balances. Missing messages can hide spending.
 

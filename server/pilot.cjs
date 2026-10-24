@@ -38,14 +38,16 @@ function createPilot(options={}){
  function allow(key,limit){const now=Date.now();if(++calls%100===0)for(const [k,v] of rate)if(v.reset<now)rate.delete(k);let r=rate.get(key);if(!r||r.reset<now){if(rate.size>5000)return false;r={count:0,reset:now+3600e3};rate.set(key,r);}return ++r.count<=limit;}
  function json(res,status,value){res.writeHead(status,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Content-Security-Policy':"default-src 'none'; frame-ancestors 'none'"});res.end(JSON.stringify(value));}
  async function body(req){if(req.headers['content-type']!=='application/json')throw Error('Use application/json');let size=0,chunks=[];for await(const c of req){size+=c.length;if(size>192*1024){throw Error('Payload too large');}chunks.push(c);}return JSON.parse(Buffer.concat(chunks).toString('utf8'));}
- function release(){const apk=path.join(root,'app','build','outputs','apk','debug','app-debug.apk');let metadata={versionCode:0,versionName:'0.0.0',parserVersion:0};try{metadata=JSON.parse(fs.readFileSync(path.join(path.dirname(apk),'release.json'),'utf8'));}catch{}return {...metadata,downloadPath:'/v1/app.apk',sha256:fs.existsSync(apk)?hash(fs.readFileSync(apk)):null};}
+ // Only the signed, non-debuggable release build is offered to phones; a debug APK is never served.
+ const apk=path.join(options.apkDir||path.join(root,'app','build','outputs','apk','release'),'app-release.apk');
+ function release(){let metadata={versionCode:0,versionName:'0.0.0',parserVersion:0};try{metadata=JSON.parse(fs.readFileSync(path.join(path.dirname(apk),'release.json'),'utf8'));}catch{}return {...metadata,downloadPath:'/v1/app.apk',sha256:fs.existsSync(apk)?hash(fs.readFileSync(apk)):null};}
 
  const server=http.createServer(async(req,res)=>{
   try{
    const route=new URL(req.url,'http://localhost').pathname,ip=req.socket.remoteAddress||'unknown';
    if(route==='/health'&&req.method==='GET')return json(res,200,{ok:true});
    if(route==='/v1/release'&&req.method==='GET')return json(res,200,release());
-   if(route==='/v1/app.apk'&&req.method==='GET'){const apk=path.join(root,'app','build','outputs','apk','debug','app-debug.apk');if(!fs.existsSync(apk))return json(res,404,{error:'Build unavailable'});res.writeHead(200,{'Content-Type':'application/vnd.android.package-archive','Content-Disposition':'attachment; filename="prardhana.apk"','X-Content-Type-Options':'nosniff'});return fs.createReadStream(apk).pipe(res);}
+   if(route==='/v1/app.apk'&&req.method==='GET'){if(!fs.existsSync(apk))return json(res,404,{error:'Build unavailable'});res.writeHead(200,{'Content-Type':'application/vnd.android.package-archive','Content-Disposition':'attachment; filename="prardhana.apk"','X-Content-Type-Options':'nosniff'});return fs.createReadStream(apk).pipe(res);}
    if(route==='/v1/enroll'&&req.method==='POST'){
     if(!allow('enroll:'+ip,30))return json(res,429,{error:'Try enrollment later'});const b=await body(req);exact(b,['code']);if(!equal(b.code,secrets.enrollCode))return json(res,401,{error:'Invalid enrollment code'});
     const token=randomBytes(32).toString('hex'),id=randomBytes(16).toString('hex'),now=Date.now();db.prepare('INSERT INTO installs(id,token,created,lastSeen) VALUES(?,?,?,?)').run(id,hash(token),now,now);return json(res,201,{installation:id,token});
