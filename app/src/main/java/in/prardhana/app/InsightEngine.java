@@ -15,10 +15,10 @@ public final class InsightEngine {
         if(budget>0 && spent>=budget*0.8) {
             boolean over=spent>budget;
             out.add(new Insight("budget","budget",over?"Your budget needs attention":"Approaching your limit",
-                money(spent)+" recorded against your "+period.toLowerCase(Locale.ROOT)+" limit of "+money(budget)+". "+(over?money(spent-budget)+" above the limit.":money(budget-spent)+" remains."),"Recorded totals",
+                money(spent)+" money out, excluding cash and marked transfers, against your "+period.toLowerCase(Locale.ROOT)+" limit of "+money(budget)+". "+(over?money(spent-budget)+" above the limit.":money(budget-spent)+" remains."),"Recorded totals",
                 Map.of("spentPaise",spent,"budgetPaise",budget)));
         }
-        List<Tx> reviewed=input.stream().filter(t->t.reviewed && t.direction.equals("debit") && !t.category.equals("Transfer") && !t.category.equals("Not a transaction") && !t.category.equals("Payment receipt") && !t.day.isAfter(today)).sorted(Comparator.comparing(Tx::day)).toList();
+        List<Tx> reviewed=input.stream().filter(t->t.reviewed && t.direction.equals("debit") && !t.category.equals("Transfer") && !t.category.equals("Cash withdrawal") && !t.category.equals("Not a transaction") && !t.category.equals("Payment receipt") && !t.day.isAfter(today)).sorted(Comparator.comparing(Tx::day)).toList();
         Map<String,List<Tx>> merchants=new TreeMap<>();
         for(Tx t:reviewed) if(!t.merchant.equals("Unknown merchant") && List.of("Bills","Entertainment","Other","Subscriptions").contains(t.category))
             merchants.computeIfAbsent(t.merchant.trim().toLowerCase(Locale.ROOT),k->new ArrayList<>()).add(t);

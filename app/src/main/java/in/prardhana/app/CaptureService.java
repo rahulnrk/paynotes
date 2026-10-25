@@ -20,7 +20,9 @@ public class CaptureService extends NotificationListenerService {
         return new Snapshot(events.length,added,duplicates,ignored);
     }
     @Override public void onNotificationPosted(StatusBarNotification event) {
-        capture(event);
+        if(!Store.prefs(this).getBoolean("capture",false)||!SourcePolicy.allowed(event.getPackageName()))return;
+        long generation=Store.prefs(this).getLong("generation",0);
+        if(!LedgerWork.submit(()->{try{synchronized(Store.class){if(Store.prefs(this).getLong("generation",0)==generation)capture(event);}}catch(RuntimeException e){Store.prefs(this).edit().putBoolean("capture_error",true).apply();}}))Store.prefs(this).edit().putBoolean("capture_error",true).apply();
     }
     private String capture(StatusBarNotification event) {
         String pkg=event.getPackageName();

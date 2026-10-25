@@ -49,16 +49,16 @@ public class LedgerTest {
   Store.capture(c,"Dear Customer, Acct XX080 is credited with Rs 300.00 on 08-Jan-25 from SAMPLE PAYER. UPI:500899999999 Avl Bal Rs 1,300.00-IDBI Bank","sms",2003000,"VM-IDBIBK",2002000);
   assertEquals("different accounts keep both credits",3,Store.rows(c).length());
  }
- @Test public void tgbLedgerCopyPairsWithItsUpiAlertInEitherOrder()throws Exception{
+ @Test public void referenceFreeBranchAlertsRemainSeparate()throws Exception{
   String upi="Your a/c no. XXXXXXXX1234 is debited for Rs.500.00 on 12-10-25 and credited to a/c no. XXXXXXXX0025 (UPI Ref no 512345678901)-TGB";
   String ledger="Your Account XXXX1234 had a TO TRANSFER of RS. 500.00 DR on 12/10/25 at 10:15:30Current balance is Rs. 2,310.45 CR TGB BRANCH";
   Store.capture(c,ledger,"sms",1000000,"JX-TGBTXN-S",999000);Store.capture(c,upi,"sms",1060000,"JX-TGBEBK-S",1059000);
-  assertEquals(1,Store.rows(c).length());assertEquals("To a/c ••0025",Store.rows(c).getJSONObject(0).getString("merchant"));assertEquals("512345678901",Store.rows(c).getJSONObject(0).getString("reference"));
+  assertEquals("No shared reference: preserve both observations",2,Store.rows(c).length());
   // A second genuine ₹500 payment minutes later keeps its own pair; re-import of the ledger copy changes nothing.
   String upi2=upi.replace("512345678901","512345678902"),ledger2=ledger.replace("2,310.45","1,810.45");
   var batch=List.of(new Store.Candidate(TransactionParser.parse(upi2,"JX-TGBEBK-S"),Store.fingerprint(upi2,1300000),1300000,upi2,1299000,"JX-TGBEBK-S"),new Store.Candidate(TransactionParser.parse(ledger2,"JX-TGBTXN-S"),Store.fingerprint(ledger2,1320000),1320000,ledger2,1319000,"JX-TGBTXN-S"),new Store.Candidate(TransactionParser.parse(ledger,"JX-TGBTXN-S"),Store.fingerprint(ledger,1000000),1000000,ledger,999000,"JX-TGBTXN-S"));
-  Store.importBatch(c,batch,0);assertEquals(2,Store.rows(c).length());
-  for(int i=0;i<2;i++)assertEquals("To a/c ••0025",Store.rows(c).getJSONObject(i).getString("merchant"));
+  Store.importBatch(c,batch,0);assertEquals(4,Store.rows(c).length());
+  int named=0;for(int i=0;i<4;i++)if(Store.rows(c).getJSONObject(i).optString("merchant").equals("To a/c ••0025"))named++;assertEquals(2,named);
  }
  @Test public void importRepairsRowsStoredByOlderParsers()throws Exception{
   LedgerDb db=LedgerDb.get(c);
@@ -78,8 +78,8 @@ public class LedgerTest {
     new Store.Candidate(TransactionParser.parse(early,"JD-UCOBNK"),Store.fingerprint(early,4000000),4000000,early,3999000,"JD-UCOBNK"));
   Store.importBatch(c,batch,0);
   JSONArray rows=Store.rows(c);Map<String,Integer> byAmount=new HashMap<>();for(int i=0;i<rows.length();i++)byAmount.merge(rows.getJSONObject(i).getLong("paise")+rows.getJSONObject(i).getString("direction"),1,Integer::sum);
-  assertEquals("TGB pair folded into one debit",Integer.valueOf(1),byAmount.get("50000debit"));
-  assertEquals("one RRN, one credit",Integer.valueOf(1),byAmount.get("30000credit"));
+  assertEquals("Reference-free TGB alerts retained",Integer.valueOf(2),byAmount.get("50000debit"));
+  assertEquals("Existing rows are not destructively collapsed",Integer.valueOf(2),byAmount.get("30000credit"));
   assertEquals("swallowed payment restored",Integer.valueOf(2),byAmount.get("10000debit"));
   assertEquals("To a/c ••0025",db.byHash(Store.fingerprint(upi,1000000)).getString("merchant"));
   assertEquals(0,Store.importBatch(c,batch,0).added());assertEquals(rows.length(),Store.rows(c).length());
