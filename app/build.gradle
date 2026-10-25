@@ -7,7 +7,7 @@ android {
     namespace 'in.prardhana.app'
     compileSdk 35
     buildFeatures { buildConfig true }
-    defaultConfig { applicationId 'in.prardhana.app'; minSdk 26; targetSdk 35; versionCode 8; versionName '0.6.2' }
+    defaultConfig { applicationId 'in.prardhana.app'; minSdk 26; targetSdk 35; versionCode 9; versionName '0.6.3' }
     defaultConfig { testInstrumentationRunner providers.gradleProperty('pilotRunner').getOrElse('in.prardhana.app.PilotInstrumentation') }
     signingConfigs {
         if (signingFile.exists()) {
@@ -34,7 +34,23 @@ dependencies {
             def source = file('src/main/java/in/prardhana/app/TransactionParser.java').getText('UTF-8')
             def parser = (source =~ /VERSION\s*=\s*(\d+)/)[0][1].toInteger()
             def destination = layout.buildDirectory.file("outputs/apk/$variant/release.json").get().asFile
-            destination.text = groovy.json.JsonOutput.toJson([versionCode:android.defaultConfig.versionCode, versionName:android.defaultConfig.versionName, parserVersion:parser])
+            def record = [versionCode:android.defaultConfig.versionCode, versionName:android.defaultConfig.versionName, parserVersion:parser]
+            destination.delete()
+            if (variant == 'release') {
+                // The pilot service offers an APK only when this record matches its bytes, so write it only after verification.
+                def apk = layout.buildDirectory.file('outputs/apk/release/app-release.apk').get().asFile
+                if (!apk.exists()) throw new GradleException('No signed release APK. Create keystore.properties (see README); unsigned builds are never published.')
+                def tools = new File(android.sdkDirectory, "build-tools/${android.buildToolsVersion}")
+                def apksigner = new File(tools, org.gradle.internal.os.OperatingSystem.current().isWindows() ? 'apksigner.bat' : 'apksigner')
+                def out = new ByteArrayOutputStream()
+                def result = project.exec { commandLine apksigner.absolutePath, 'verify', '--print-certs', apk.absolutePath; standardOutput = out; errorOutput = out; ignoreExitValue = true }
+                def signer = (out.toString() =~ /Signer #1 certificate SHA-256 digest: ([0-9a-f]{64})/)
+                if (result.exitValue != 0 || !signer.find()) throw new GradleException("Release APK failed signature verification:\n$out")
+                record.apkSha256 = apk.bytes.digest('SHA-256')
+                record.signerSha256 = signer.group(1)
+                record.debuggable = android.buildTypes.release.debuggable
+            }
+            destination.text = groovy.json.JsonOutput.toJson(record)
         }
     }
     tasks.matching { it.name == "assemble${variant.capitalize()}" }.configureEach { finalizedBy manifest }

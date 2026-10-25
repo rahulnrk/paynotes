@@ -12,8 +12,14 @@ const {createPilot}=require('../server/pilot.cjs');
   // No signed release built yet: nothing to download, and a debug APK is never offered.
   assert.equal((await request('/v1/release')).body.sha256,null);assert.equal((await fetch(base+'/v1/app.apk')).status,404);
   fs.writeFileSync(path.join(apkDir,'app-debug.apk'),'debug build');assert.equal((await fetch(base+'/v1/app.apk')).status,404);
+  const releaseHash=require('node:crypto').createHash('sha256').update('signed release').digest('hex');
+  // An APK without a matching verified build record (unsigned rebuild, swapped file) is never offered.
   fs.writeFileSync(path.join(apkDir,'app-release.apk'),'signed release');fs.writeFileSync(path.join(apkDir,'release.json'),JSON.stringify({versionCode:7,versionName:'0.6.1',parserVersion:7}));
-  const rel=(await request('/v1/release')).body;assert.equal(rel.versionCode,7);assert.equal(rel.sha256,require('node:crypto').createHash('sha256').update('signed release').digest('hex'));
+  assert.equal((await request('/v1/release')).body.verified,false);assert.equal((await fetch(base+'/v1/app.apk')).status,404);
+  fs.writeFileSync(path.join(apkDir,'release.json'),JSON.stringify({versionCode:7,versionName:'0.6.1',parserVersion:7,apkSha256:'0'.repeat(64),signerSha256:'ab',debuggable:false}));
+  assert.equal((await fetch(base+'/v1/app.apk')).status,404);
+  fs.writeFileSync(path.join(apkDir,'release.json'),JSON.stringify({versionCode:7,versionName:'0.6.1',parserVersion:7,apkSha256:releaseHash,signerSha256:'ab',debuggable:false}));
+  const rel=(await request('/v1/release')).body;assert.equal(rel.versionCode,7);assert.equal(rel.verified,true);assert.equal(rel.sha256,releaseHash);
   const download=await fetch(base+'/v1/app.apk');assert.equal(download.status,200);assert.equal(await download.text(),'signed release');
   assert.equal((await request('/v1/admin/overview')).status,401);
   assert.equal((await request('/v1/enroll','POST',{code:'wrong'})).status,401);

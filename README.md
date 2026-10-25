@@ -1,10 +1,10 @@
 # Prardhana — connected Android pilot
 
-Local-first expense tracking, recurring-payment candidates, financial events and an opt-in development feedback service. Version **0.6.2 / parser 7** is a development build, not a verified financial ledger or fraud service.
+Local-first expense tracking, recurring-payment candidates, financial events and an opt-in development feedback service. Version **0.6.3 / parser 8** is a development build, not a verified financial ledger or fraud service.
 
 Transactions now live in indexed SQLite. Legacy preferences migrate with reviewed corrections preserved. Pending/failed payments stay outside spending. Testers can enroll over HTTPS and report masked message formats without connecting phones to a laptop. No raw SMS, merchant names, amounts, accounts or payment references are uploaded to the pilot admin.
 
-See [0.6.2 changes and upgrade limits](docs/V062_CHANGES.md) for conservative duplicate handling, durable deletions, background writes and monthly message history.
+See [0.6.3 audit fixes](docs/V063_CHANGES.md) and [0.6.2 changes and upgrade limits](docs/V062_CHANGES.md) for conservative duplicate handling, durable deletions, background writes and monthly message history.
 
 ## Build and install
 

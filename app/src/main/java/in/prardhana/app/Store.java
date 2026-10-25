@@ -9,9 +9,16 @@ final class Store {
     static android.content.SharedPreferences prefs(Context c) { return c.getSharedPreferences("pilot", 0); }
     static JSONArray rows(Context c) { return LedgerDb.get(c).rows(); }
     static synchronized String capture(Context c,String text,String source,long time){return capture(c,text,source,time,null,0);}
+    /** Event, diagnostics, movement, identities and reconciliation commit together; the widget refreshes only after commit. */
     static synchronized String capture(Context c,String text,String source,long time,String sender,long sentAt){
         // A disallowed source leaves no trace: no event, no diagnostic pattern, no movement.
         if(!SourcePolicy.allowed(source))return "No completed transaction found. This app is not a supported payment source.";
+        android.database.sqlite.SQLiteDatabase sql=LedgerDb.get(c).getWritableDatabase();String result;
+        sql.beginTransaction();try{result=record(c,text,source,time,sender,sentAt);LedgerDb.get(c).trimEvents();sql.setTransactionSuccessful();}finally{sql.endTransaction();}
+        if(result.startsWith("Transaction added"))BudgetWidget.refresh(c);
+        return result;
+    }
+    private static String record(Context c,String text,String source,long time,String sender,long sentAt){
         FinancialEvents.observe(c,text,sender,source,time,sentAt);
         TransactionParser.Parsed p=SourcePolicy.parse(text,sender,source);
         Learning.observe(c,text,sender,p,canonical(text,source,sender,sentAt).isEmpty()?fingerprint(text,time):canonical(text,source,sender,sentAt));
@@ -32,7 +39,7 @@ final class Store {
                 prefs(c).edit().putInt("duplicates",prefs(c).getInt("duplicates",0)+1).apply();return "Duplicate ignored";
             }
             row=facts.put("id",UUID.randomUUID().toString()).put("fingerprint",hash).put("canonical",canonical).put("reviewed",false);
-            applyParsed(c,row,p);db.put(row);FinancialEvents.reconcile(c,row);BudgetWidget.refresh(c);
+            applyParsed(c,row,p);db.put(row);FinancialEvents.reconcile(c,row);
             return "Transaction added · review the merchant and category";
         }catch(JSONException e){throw new IllegalStateException(e);}
     }
@@ -124,9 +131,9 @@ final class Store {
                     if(!before.equals(row.toString())){db.put(row);refreshed++;}db.alias(candidate.fingerprint,row.optString("id"));db.alias(canonical,row.optString("id"));continue;}
                 row=facts.put("id",UUID.randomUUID().toString()).put("fingerprint",candidate.fingerprint).put("canonical",canonical).put("reviewed",false);applyParsed(c,row,p);db.put(row);added++;
             }
-            db.trimEvents();sql.setTransactionSuccessful();
+            db.trimEvents();FinancialEvents.reconcileAll(c);sql.setTransactionSuccessful();
         }catch(JSONException e){throw new IllegalStateException(e);}finally{sql.endTransaction();}
-        FinancialEvents.reconcileAll(c);BudgetWidget.refresh(c);return new Batch(added,duplicates,refreshed,excluded);
+        BudgetWidget.refresh(c);return new Batch(added,duplicates,refreshed,excluded);
     }
     static synchronized int[] refreshImported(Context c,Map<String,TransactionParser.Parsed> parsed,long generation){
         if(!prefs(c).getBoolean("sms_capture",false)||prefs(c).getLong("generation",0)!=generation)return new int[]{0,0};
@@ -145,6 +152,12 @@ final class Store {
     static long spent(Context c, String period) {
         return LedgerDb.get(c).spent(start(period),System.currentTimeMillis());
     }
+    /** ₹100 crore: well above any single message-reported movement, and safely inside a long. */
+    static final long MAX_PAISE=100_000_000_000L;
+    /** Rupees as typed ("1,250.5") to integer paise; -1 when it is not a positive amount with at most two decimals. */
+    static long parseRupees(String typed){
+        try{long p=new java.math.BigDecimal(typed.trim().replace(",","")).movePointRight(2).longValueExact();return p>0&&p<=MAX_PAISE?p:-1;}catch(RuntimeException e){return -1;}
+    }
     static String money(long paise) { return java.text.NumberFormat.getCurrencyInstance(new Locale("en", "IN")).format(paise / 100.0); }
     static synchronized void edit(Context c, String id, String name, String category, boolean remove) {
         LedgerDb db=LedgerDb.get(c);JSONObject row=db.byId(id);if(row==null)return;
@@ -154,16 +167,27 @@ final class Store {
     private static JSONArray reviewCandidates(LedgerDb db,JSONObject selected){
         return db.select("reviewed=0 AND direction=? AND source=? AND issuer=? AND account=?",selected.optString("direction"),selected.optString("source"),selected.optString("issuer"),selected.optString("account"));
     }
-    static synchronized void review(Context c,String id,String name,String category,String direction,boolean remember){
+    static void review(Context c,String id,String name,String category,String direction,boolean remember){review(c,id,name,category,direction,remember,0);}
+    /**
+     * paise &gt; 0 overrides the extracted amount. The first extracted value stays in originalPaise; re-import never replaces
+     * a reviewed row's amount. Event resolutions that relied on this movement are re-checked in the same transaction.
+     */
+    static synchronized void review(Context c,String id,String name,String category,String direction,boolean remember,long paise){
+        if(paise<0||paise>MAX_PAISE)throw new IllegalArgumentException("Amount out of range");
         LedgerDb db=LedgerDb.get(c);JSONObject selected=db.byId(id);if(selected==null)return;
         android.database.sqlite.SQLiteDatabase sql=db.getWritableDatabase();sql.beginTransaction();
         try{JSONObject before=new JSONObject(selected.toString());String vpa=selected.optString("vpa"),raw=selected.optString("rawMerchant",selected.optString("merchant"));
+            if(paise>0&&paise!=selected.optLong("paise")){
+                if(!selected.has("originalPaise"))selected.put("originalPaise",selected.optLong("paise"));
+                if(paise==selected.optLong("originalPaise")){selected.remove("originalPaise");selected.remove("amountSource");}else selected.put("amountSource","You corrected");
+                selected.put("paise",paise);
+            }
             if(remember&&!MerchantRules.key(vpa,raw).isEmpty()&&selected.optString("direction").equals(direction)){
                 JSONArray group=reviewCandidates(db,selected);
                 for(int i=0;i<group.length();i++){JSONObject r=group.getJSONObject(i);if(sameReviewGroup(selected,r)){r.put("merchant",name).put("category",category).put("nameSource","Your saved rule").put("categorySource","Your saved rule");db.put(r);}}
             }
             selected.put("merchant",name).put("category",category).put("direction",direction).put("reviewed",true).put("nameSource","You confirmed").put("categorySource","You confirmed");
-            db.put(selected);Learning.correction(c,before,selected);sql.setTransactionSuccessful();
+            db.put(selected);db.releaseEvents(id);FinancialEvents.reconcile(c,selected);Learning.correction(c,before,selected);sql.setTransactionSuccessful();
         }catch(JSONException e){throw new IllegalStateException(e);}finally{sql.endTransaction();}
         if(remember)MerchantRules.remember(c,selected.optString("vpa"),selected.optString("rawMerchant"),name,category,selected.optString("issuer"),selected.optString("source"),selected.optString("channel"),direction);
         prefs(c).edit().putInt("corrections",prefs(c).getInt("corrections",0)+1).apply();BudgetWidget.refresh(c);

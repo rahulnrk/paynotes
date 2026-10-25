@@ -69,7 +69,18 @@ final class LedgerDb extends SQLiteOpenHelper {
     void put(JSONObject r){put(getWritableDatabase(),r);}
     void alias(String hash,String id){if(hash.isEmpty())return;ContentValues v=new ContentValues();v.put("hash",hash);v.put("movement",id);getWritableDatabase().insertWithOnConflict("evidence",null,v,SQLiteDatabase.CONFLICT_IGNORE);}
     void save(JSONArray rows){SQLiteDatabase db=getWritableDatabase();db.beginTransaction();try{for(int i=0;i<rows.length();i++)put(db,rows.optJSONObject(i));db.setTransactionSuccessful();}finally{db.endTransaction();}}
-    void remove(String id){SQLiteDatabase db=getWritableDatabase();db.beginTransaction();try{JSONObject row=byId(id);if(row!=null){tombstone(row.optString("fingerprint"));tombstone(row.optString("canonical"));}try(Cursor c=db.rawQuery("SELECT hash FROM evidence WHERE movement=?",new String[]{id})){while(c.moveToNext())tombstone(c.getString(0));}db.delete("movements","id=?",new String[]{id});db.delete("evidence","movement=?",new String[]{id});db.setTransactionSuccessful();}finally{db.endTransaction();}}
+    void remove(String id){SQLiteDatabase db=getWritableDatabase();db.beginTransaction();try{JSONObject row=byId(id);if(row!=null){tombstone(row.optString("fingerprint"));tombstone(row.optString("canonical"));}try(Cursor c=db.rawQuery("SELECT hash FROM evidence WHERE movement=?",new String[]{id})){while(c.moveToNext())tombstone(c.getString(0));}db.delete("movements","id=?",new String[]{id});db.delete("evidence","movement=?",new String[]{id});releaseEvents(id);db.setTransactionSuccessful();}finally{db.endTransaction();}}
+    /** Re-opens automatic event resolutions that cited this movement. Statuses the user confirmed stay as they set them. */
+    void releaseEvents(String movementId){
+        if(movementId.isEmpty())return;
+        java.util.List<JSONObject> cited=new java.util.ArrayList<>();
+        try(Cursor cur=getReadableDatabase().rawQuery("SELECT data FROM events WHERE data LIKE ?",new String[]{"%"+movementId+"%"})){while(cur.moveToNext())cited.add(object(cur.getString(0)));}
+        for(JSONObject e:cited){
+            if(!movementId.equals(e.optString("movementId"))||"You confirmed".equals(e.optString("statusSource")))continue;
+            try{e.put("status","Open");}catch(JSONException x){throw new IllegalStateException(x);}
+            e.remove("statusSource");e.remove("movementId");updateEvent(e);
+        }
+    }
     static void event(SQLiteDatabase db,JSONObject e){String id=e.optString("id",e.optString("fingerprint"));if(id.isEmpty())return;ContentValues v=new ContentValues();v.put("id",id);v.put("time",e.optLong("time"));v.put("fingerprint",e.optString("fingerprint"));v.put("data",e.toString());try(Cursor cur=db.rawQuery("SELECT id FROM events WHERE id=? OR fingerprint=? LIMIT 1",new String[]{id,e.optString("fingerprint")})){if(cur.moveToFirst())return;}db.insertOrThrow("events",null,v);}
     JSONArray events(){JSONArray a=new JSONArray();try(Cursor cur=getReadableDatabase().rawQuery("SELECT data FROM events ORDER BY time,id",null)){while(cur.moveToNext())a.put(object(cur.getString(0)));}return a;}
     void event(JSONObject e){event(getWritableDatabase(),e);if(!getWritableDatabase().inTransaction())trimEvents();}

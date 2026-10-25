@@ -5,7 +5,7 @@ import java.util.regex.*;
 
 /** Conservative local extraction. Ambiguous messages are deliberately ignored. */
 public final class TransactionParser {
-    public static final int VERSION=7;
+    public static final int VERSION=8;
     /** format is "core-ledger" for branch-ledger copies (e.g. TGB "TO TRANSFER … DR") that repeat a UPI alert without its reference. */
     public record Parsed(long paise, String direction, String merchant, String category, String reference, String type, String channel, String vpa, String nameSource, String format) {}
     public static Parsed parse(String text) {
@@ -43,17 +43,14 @@ public final class TransactionParser {
         if(!own&&credit&&s.matches("(?s).*\\b(?:proposal|premium receipt)\\b.*"))return null;
         if(credit&&!own&&!s.contains("credited")&&!s.contains("refunded")&&!s.matches("(?s).*(?:received\\s+(?:a\\s+)?(?:payment\\s+of\\s+)?(?:rs\\.?|inr|₹)|(?:rs\\.?|inr|₹)\\s*[0-9,.]+\\s+(?:has been\\s+)?received).*"))return null;
         if (debit == credit) return null;
-        Matcher amount = Pattern.compile("(?i)(?:₹|rs\\.?|inr\\.?)\\s*([0-9][0-9,]*(?:\\.[0-9]{1,2})?)(?![0-9]|[lL](?:akh)?\\b)").matcher(text);
-        boolean currencyAmount=amount.find();
-        if(!currencyAmount){
+        long paise=movementAmount(text,s);
+        if(paise==0){
             // UPI bank-alert dialect: currency is implicit, never inferred from an arbitrary number.
             if(!own||!s.matches("(?s).*\\bupi\\b.*")||!s.matches("(?s).*\\b(?:refno|rrn|utr|reference\\s*(?:no|number)?)\\s*[:#.-]?\\s*[a-z0-9]{6,}.*"))return null;
-            amount=Pattern.compile("(?i)\\b(?:debited|credited)\\s+(?:by|with|for)\\s+([0-9][0-9,]*(?:\\.[0-9]{1,2})?)(?=\\s|[.;]|$)").matcher(text);
-            if(!amount.find())return null;
+            Matcher implicit=Pattern.compile("(?i)\\b(?:debited|credited)\\s+(?:by|with|for)\\s+([0-9][0-9,]*(?:\\.[0-9]{1,2})?)(?=\\s|[.;]|$)").matcher(text);
+            if(!implicit.find())return null;
+            paise=paise(implicit.group(1));
         }
-        long paise;
-        try { paise = new java.math.BigDecimal(amount.group(1).replace(",", "")).movePointRight(2).longValueExact(); }
-        catch (RuntimeException e) { return null; }
         if (paise <= 0) return null;
         // "To block UPI …" is a security footer, not a payee.
         Matcher merchant = Pattern.compile("(?i)\\b(?:to|at|from)\\s+(?!block\\b)([a-z][a-z0-9 &@._-]{1,45}?)(?=\\s+(?:on|via|using|ref(?:no|erence)?|rrn|utr|if|txn|upi|a/c|avl|bal|available|limit)\\b|[;\\n]|$)").matcher(text);
@@ -90,6 +87,32 @@ public final class TransactionParser {
         String reference=ref.find()?ref.group(1).toUpperCase(Locale.ROOT):"";
         if(reference.isEmpty()){Matcher railRef=Pattern.compile("(?i)\\bUPI[/: -]+(?:(?:DR|CR|P2A|P2M)[/: -]+)?([0-9]{10,16})\\b").matcher(text);if(railRef.find())reference=railRef.group(1);}
         return new Parsed(paise, credit ? "credit" : "debit", name, category, reference,type,channel,vpa,maskedPayee?"Masked account only":name.equals("Unknown merchant")?(vpa.isEmpty()?"Missing in message":"UPI ID only"):"Message text",coreLedger?"core-ledger":"");
+    }
+    // A whole monetary token: "INR 10.999" never shortens to INR 10, and "Rs 5L" is not 5 rupees.
+    private static final Pattern MONEY=Pattern.compile("(?i)(?:₹|rs\\.?|inr\\.?)\\s*([0-9][0-9,]*(?:\\.[0-9]{1,2})?)(?![0-9]|\\.[0-9]|[lL](?:akh)?\\b)");
+    private static final Pattern MALFORMED=Pattern.compile("(?i)(?:₹|rs\\.?|inr\\.?)\\s*[0-9][0-9,]*\\.[0-9]{3,}");
+    private static final Pattern STATE_ROLE=Pattern.compile("(?:\\bbal(?:ance)?|\\bavl|\\bavbl|\\bavail(?:able)?|\\blimit|\\blmt|\\boutstanding|\\bo/s|\\bup\\s*to|\\bworth|\\beligible|\\bwin)\\b[^0-9\\n]{0,20}$");
+    private static final Pattern VERB=Pattern.compile("\\b(?:debited|credited|paid|spent|sent|withdrawn|received|refunded|purchase|charged|transferred|debit|credit|payment|txn|transaction|dr|cr)\\b");
+    /**
+     * The executed movement's amount in paise: 0 when no currency amount describes a movement, -1 to abstain.
+     * Balances and limits are states, not movements. Several distinct candidates must be bound to the movement verb.
+     */
+    static long movementAmount(String text,String lower){
+        if(MALFORMED.matcher(text).find())return -1;
+        Matcher m=MONEY.matcher(text);java.util.Set<Long> all=new java.util.LinkedHashSet<>(),bound=new java.util.LinkedHashSet<>();
+        while(m.find()){
+            String before=lower.substring(Math.max(0,m.start()-30),m.start()),near=lower.substring(Math.max(0,m.start()-20),m.start());
+            if(STATE_ROLE.matcher(before).find())continue;
+            long value=paise(m.group(1));if(value<=0)return -1;all.add(value);
+            String after=lower.substring(m.end(),Math.min(lower.length(),m.end()+25));
+            if(VERB.matcher(near).find()||VERB.matcher(after).find())bound.add(value);
+        }
+        if(all.isEmpty())return 0;
+        if(all.size()==1)return all.iterator().next();
+        return bound.size()==1?bound.iterator().next():-1;
+    }
+    private static long paise(String amount){
+        try{return new java.math.BigDecimal(amount.replace(",","")).movePointRight(2).longValueExact();}catch(RuntimeException e){return -1;}
     }
     public static Parsed parse(String text,String sender){
         if(sender!=null&&sender.toUpperCase(Locale.ROOT).matches("[A-Z]{2}-[A-Z0-9]{6}-P")){
