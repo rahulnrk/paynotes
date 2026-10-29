@@ -1,0 +1,9 @@
+<resources>
+    <style name="PaynotesTheme" parent="android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:fontFamily">@font/dm_sans</item>
+        <item name="android:colorAccent">#087F8C</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowActionModeOverlay">true</item>
+        <item name="android:windowBackground">#F7F9FA</item>
+    </style>
+</resources>

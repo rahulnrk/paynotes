@@ -9,7 +9,7 @@ import org.json.*;
 final class LedgerDb extends SQLiteOpenHelper {
     private static LedgerDb instance;
     static synchronized LedgerDb get(Context c){if(instance==null)instance=new LedgerDb(c.getApplicationContext());return instance;}
-    private LedgerDb(Context c){super(c,"ledger.db",null,2);setWriteAheadLoggingEnabled(true);migrate(c);}
+    private LedgerDb(Context c){super(c,"ledger.db",null,3);setWriteAheadLoggingEnabled(true);migrate(c);}
     @Override public void onCreate(SQLiteDatabase db){
         db.execSQL("CREATE TABLE movements(id TEXT PRIMARY KEY, time INTEGER NOT NULL, amount INTEGER NOT NULL, direction TEXT, reference TEXT COLLATE NOCASE, source TEXT, issuer TEXT, account TEXT, fingerprint TEXT, canonical TEXT, bodyHash TEXT, category TEXT, reviewed INTEGER, merchant TEXT, data TEXT NOT NULL)");
         db.execSQL("CREATE INDEX movement_time ON movements(time)");db.execSQL("CREATE INDEX movement_reference ON movements(reference,amount,direction)");db.execSQL("CREATE INDEX movement_hash ON movements(fingerprint)");db.execSQL("CREATE INDEX movement_canonical ON movements(canonical)");
@@ -20,21 +20,28 @@ final class LedgerDb extends SQLiteOpenHelper {
         db.execSQL("CREATE TABLE reports(id TEXT PRIMARY KEY,data TEXT NOT NULL)");
         db.execSQL("CREATE TABLE tombstones(hash TEXT PRIMARY KEY)");
         db.execSQL("CREATE TABLE meta(key TEXT PRIMARY KEY,value TEXT NOT NULL)");
+        coachSchema(db);
+    }
+    private static void coachSchema(SQLiteDatabase db){
+        db.execSQL("CREATE TABLE IF NOT EXISTS coach_state(id INTEGER PRIMARY KEY CHECK(id=1),data TEXT NOT NULL)");
+        db.execSQL("CREATE TABLE IF NOT EXISTS payment_meaning(id TEXT PRIMARY KEY,share INTEGER NOT NULL,bucket TEXT NOT NULL,kind TEXT NOT NULL,linked TEXT NOT NULL DEFAULT '')");
+        db.execSQL("CREATE INDEX IF NOT EXISTS meaning_link ON payment_meaning(linked,kind)");
     }
     @Override public void onUpgrade(SQLiteDatabase db,int old,int next){
+        if(old<3)coachSchema(db);
         if(old<2)db.execSQL("CREATE TABLE IF NOT EXISTS tombstones(hash TEXT PRIMARY KEY)");
     }
     // Added after v1 shipped; idempotent, so existing ledgers gain it without a schema version change.
     @Override public void onOpen(SQLiteDatabase db){if(!db.isReadOnly())db.execSQL("CREATE INDEX IF NOT EXISTS movement_body ON movements(bodyHash)");}
     private void migrate(Context c){
-        SQLiteDatabase db=getWritableDatabase();try(Cursor cur=db.rawQuery("SELECT value FROM meta WHERE key='legacy_migrated'",null)){if(cur.moveToFirst()){Store.prefs(c).edit().remove("transactions").remove("financial_events").commit();return;}}
+        SQLiteDatabase db=getWritableDatabase();try(Cursor cur=db.rawQuery("SELECT value FROM meta WHERE key='legacy_migrated'",null)){if(cur.moveToFirst()){Store.prefs(c).edit().remove("transactions").remove("financial_events").apply();return;}}
         db.beginTransaction();try{
             JSONArray rows=new JSONArray(Store.prefs(c).getString("transactions","[]"));for(int i=0;i<rows.length();i++){JSONObject r=rows.getJSONObject(i);if(r.optString("id").isEmpty())throw new JSONException("Missing legacy identity");put(db,r);}
             JSONArray events=new JSONArray(Store.prefs(c).getString("financial_events","[]"));for(int i=0;i<events.length();i++){JSONObject e=events.getJSONObject(i);event(db,e);}
             db.execSQL("INSERT INTO meta(key,value) VALUES('legacy_migrated','1')");db.setTransactionSuccessful();
         }catch(JSONException e){throw new IllegalStateException("Legacy data could not migrate; original preferences retained",e);}finally{db.endTransaction();}
         // Remove only after the SQLite transaction committed. A crash before this is safe to retry.
-        Store.prefs(c).edit().remove("transactions").remove("financial_events").commit();
+        Store.prefs(c).edit().remove("transactions").remove("financial_events").apply();
     }
     static JSONObject object(String value){try{return new JSONObject(value);}catch(JSONException e){throw new IllegalStateException("Corrupt local ledger",e);}}
     JSONArray rows(){JSONArray a=new JSONArray();try(Cursor cur=getReadableDatabase().rawQuery("SELECT data FROM movements ORDER BY time,id",null)){while(cur.moveToNext())a.put(object(cur.getString(0)));}return a;}
@@ -65,11 +72,16 @@ final class LedgerDb extends SQLiteOpenHelper {
     boolean deleted(String... hashes){for(String hash:hashes){if(hash.isEmpty())continue;try(Cursor c=getReadableDatabase().rawQuery("SELECT 1 FROM tombstones WHERE hash=?",new String[]{hash})){if(c.moveToFirst())return true;}}return false;}
     private void tombstone(String hash){if(hash.isEmpty())return;ContentValues v=new ContentValues();v.put("hash",hash);getWritableDatabase().insertWithOnConflict("tombstones",null,v,SQLiteDatabase.CONFLICT_IGNORE);}
     JSONArray near(long amount,String direction,long from,long to){JSONArray a=new JSONArray();try(Cursor cur=getReadableDatabase().rawQuery("SELECT data FROM movements WHERE amount=? AND direction=? AND time BETWEEN ? AND ?",new String[]{String.valueOf(amount),direction,String.valueOf(from),String.valueOf(to)})){while(cur.moveToNext())a.put(object(cur.getString(0)));}return a;}
-    static void put(SQLiteDatabase db,JSONObject r){ContentValues v=new ContentValues();v.put("id",r.optString("id"));v.put("time",r.optLong("time"));v.put("amount",r.optLong("paise"));for(String k:new String[]{"direction","reference","source","issuer","account","fingerprint","canonical","bodyHash","category","merchant"})v.put(k,r.optString(k));v.put("reviewed",r.optBoolean("reviewed")?1:0);v.put("data",r.toString());if(db.insertWithOnConflict("movements",null,v,SQLiteDatabase.CONFLICT_REPLACE)==-1)throw new IllegalStateException("Ledger write failed");}
+    static void put(SQLiteDatabase db,JSONObject r){
+        // Preserve confirmed splits: changing the underlying amount/direction requires an explicit reset.
+        try(Cursor c=db.rawQuery("SELECT amount,direction FROM movements WHERE id=? AND (id IN (SELECT id FROM payment_meaning) OR id IN (SELECT linked FROM payment_meaning))",new String[]{r.optString("id")})){
+            if(c.moveToFirst()&&(c.getLong(0)!=r.optLong("paise")||!c.getString(1).equals(r.optString("direction"))))throw new IllegalArgumentException("Reset payment-purpose corrections before changing its amount or direction.");
+        }
+        ContentValues v=new ContentValues();v.put("id",r.optString("id"));v.put("time",r.optLong("time"));v.put("amount",r.optLong("paise"));for(String k:new String[]{"direction","reference","source","issuer","account","fingerprint","canonical","bodyHash","category","merchant"})v.put(k,r.optString(k));v.put("reviewed",r.optBoolean("reviewed")?1:0);v.put("data",r.toString());if(db.insertWithOnConflict("movements",null,v,SQLiteDatabase.CONFLICT_REPLACE)==-1)throw new IllegalStateException("Ledger write failed");}
     void put(JSONObject r){put(getWritableDatabase(),r);}
     void alias(String hash,String id){if(hash.isEmpty())return;ContentValues v=new ContentValues();v.put("hash",hash);v.put("movement",id);getWritableDatabase().insertWithOnConflict("evidence",null,v,SQLiteDatabase.CONFLICT_IGNORE);}
     void save(JSONArray rows){SQLiteDatabase db=getWritableDatabase();db.beginTransaction();try{for(int i=0;i<rows.length();i++)put(db,rows.optJSONObject(i));db.setTransactionSuccessful();}finally{db.endTransaction();}}
-    void remove(String id){SQLiteDatabase db=getWritableDatabase();db.beginTransaction();try{JSONObject row=byId(id);if(row!=null){tombstone(row.optString("fingerprint"));tombstone(row.optString("canonical"));}try(Cursor c=db.rawQuery("SELECT hash FROM evidence WHERE movement=?",new String[]{id})){while(c.moveToNext())tombstone(c.getString(0));}db.delete("movements","id=?",new String[]{id});db.delete("evidence","movement=?",new String[]{id});releaseEvents(id);db.setTransactionSuccessful();}finally{db.endTransaction();}}
+    void remove(String id){SQLiteDatabase db=getWritableDatabase();db.beginTransaction();try{JSONObject row=byId(id);if(row!=null){tombstone(row.optString("fingerprint"));tombstone(row.optString("canonical"));}try(Cursor c=db.rawQuery("SELECT hash FROM evidence WHERE movement=?",new String[]{id})){while(c.moveToNext())tombstone(c.getString(0));}db.delete("payment_meaning","id=? OR linked=?",new String[]{id,id});db.delete("movements","id=?",new String[]{id});db.delete("evidence","movement=?",new String[]{id});releaseEvents(id);db.setTransactionSuccessful();}finally{db.endTransaction();}}
     /** Re-opens automatic event resolutions that cited this movement. Statuses the user confirmed stay as they set them. */
     void releaseEvents(String movementId){
         if(movementId.isEmpty())return;
@@ -86,8 +98,8 @@ final class LedgerDb extends SQLiteOpenHelper {
     void event(JSONObject e){event(getWritableDatabase(),e);if(!getWritableDatabase().inTransaction())trimEvents();}
     void updateEvent(JSONObject e){ContentValues v=new ContentValues();v.put("data",e.toString());getWritableDatabase().update("events",v,"id=?",new String[]{e.optString("id",e.optString("fingerprint"))});}
     void trimEvents(){getWritableDatabase().execSQL("DELETE FROM events WHERE id NOT IN (SELECT id FROM events ORDER BY time DESC LIMIT 2000)");}
-    void clear(){SQLiteDatabase db=getWritableDatabase();db.beginTransaction();try{for(String table:new String[]{"movements","events","evidence","diagnostics","diagnostic_seen","reports","tombstones"})db.delete(table,null,null);db.setTransactionSuccessful();}finally{db.endTransaction();}}
-    long spent(long start,long end){try(Cursor c=getReadableDatabase().rawQuery("SELECT COALESCE(SUM(amount),0) FROM movements WHERE time>=? AND time<=? AND direction='debit' AND source!='sample' AND category NOT IN ('Transfer','Not a transaction','Payment receipt','Cash withdrawal')",new String[]{String.valueOf(start),String.valueOf(end)})){c.moveToFirst();return c.getLong(0);}}
+    void clear(){SQLiteDatabase db=getWritableDatabase();db.beginTransaction();try{for(String table:new String[]{"movements","events","evidence","diagnostics","diagnostic_seen","reports","tombstones","coach_state","payment_meaning"})db.delete(table,null,null);db.setTransactionSuccessful();}finally{db.endTransaction();}}
+    long spent(long start,long end){try(Cursor c=getReadableDatabase().rawQuery("SELECT COALESCE(SUM(MAX(0,COALESCE(p.share,m.amount)-COALESCE((SELECT SUM(r.amount) FROM payment_meaning x JOIN movements r ON r.id=x.id WHERE x.linked=m.id AND x.kind='refund' AND r.direction='credit' AND r.source!='sample' AND r.category!='Not a transaction'),0))),0) FROM movements m LEFT JOIN payment_meaning p ON p.id=m.id WHERE m.time>=? AND m.time<=? AND m.direction='debit' AND m.source!='sample' AND m.category NOT IN ('Not a transaction','Payment receipt') AND (m.category NOT IN ('Transfer','Cash withdrawal') OR p.id IS NOT NULL)",new String[]{String.valueOf(start),String.valueOf(end)})){c.moveToFirst();return c.getLong(0);}}
     record Outflow(long moneyOut,long cash,long transfers,long remaining){}
     record MonthSummary(long moneyIn,Outflow outflow,int entries,int unreviewed){}
     MonthSummary month(long start,long end){

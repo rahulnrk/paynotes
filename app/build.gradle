@@ -7,7 +7,7 @@ android {
     namespace 'in.prardhana.app'
     compileSdk 35
     buildFeatures { buildConfig true }
-    defaultConfig { applicationId 'in.prardhana.app'; minSdk 26; targetSdk 35; versionCode 9; versionName '0.6.3' }
+    defaultConfig { applicationId 'in.prardhana.app'; minSdk 26; targetSdk 35; versionCode 12; versionName '0.8.1' }
     defaultConfig { testInstrumentationRunner providers.gradleProperty('pilotRunner').getOrElse('in.prardhana.app.PilotInstrumentation') }
     signingConfigs {
         if (signingFile.exists()) {
@@ -19,7 +19,7 @@ android {
         release { debuggable false; minifyEnabled false; if (signingFile.exists()) signingConfig signingConfigs.release }
     }
     compileOptions { coreLibraryDesugaringEnabled true; sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }
-    testOptions { unitTests.returnDefaultValues = true; unitTests.all { systemProperty 'pilot.testArtifacts', rootProject.file('artifacts/v06-tests').absolutePath } }
+    testOptions { unitTests.returnDefaultValues = true; unitTests.includeAndroidResources = true; unitTests.all { systemProperty 'pilot.testArtifacts', rootProject.file('artifacts/v06-tests').absolutePath } }
 }
 dependencies {
     coreLibraryDesugaring 'com.android.tools:desugar_jdk_libs:2.1.5'

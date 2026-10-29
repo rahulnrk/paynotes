@@ -1,0 +1,32 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+  <string name="withdrawal_correction">Withdrawal / correct previous funding</string>
+  <string name="covered_by_commitments">Covered by my protected costs / commitments</string>
+  <string name="clarify_largest_entries">Clarify largest entries (up to 5)</string>
+  <string name="report_extraction_issue">Report extraction issue (masked)</string>
+  <string name="learn_notification_patterns">Learn masked notification patterns</string>
+  <string name="pilot_consent">I agree to share diagnostic counts, masked patterns and correction labels</string>
+  <string name="preview_shared_data">Preview exactly what is shared</string>
+  <string name="join_sync">Join / sync now</string>
+  <string name="stop_sharing">Stop sharing</string>
+  <string name="delete_shared_data">Delete shared pilot data</string>
+  <string name="pilot_progress">Report progress / app update</string>
+  <string name="recurring_status">Confirm / pause / dismiss</string>
+  <string name="payment_display_limit">Showing 10,000 payments · narrow the filters for more</string>
+  <string name="payment_load_failed">Couldn\'t load payments. Change a filter to retry.</string>
+  <plurals name="review_matching">
+    <item quantity="one">Review %1$d matching entry</item>
+    <item quantity="other">Review %1$d matching entries together</item>
+  </plurals>
+  <string name="remember_name">Remember this exact extracted name</string>
+  <string name="remember_upi">Remember this exact UPI ID</string>
+  <string name="chart_selection">%1$s · %2$s</string>
+  <string name="no_matching_payments">No payments match these filters</string>
+  <string name="widget_heading">PAYNOTES  /  SPENDING</string>
+  <string name="widget_amount">₹0</string>
+  <string name="widget_detail">Money out · tap to open</string>
+  <plurals name="payment_count">
+    <item quantity="one">%1$d payment · newest first</item>
+    <item quantity="other">%1$d payments · newest first</item>
+  </plurals>
+</resources>

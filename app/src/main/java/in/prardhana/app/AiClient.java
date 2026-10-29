@@ -7,6 +7,28 @@ import java.nio.charset.StandardCharsets;
 import java.util.*;
 
 final class AiClient {
+    static String chat(String endpoint,String token,JSONObject payload) throws Exception {return chatResponse(endpoint,token,payload).getString("reply");}
+    static JSONObject chatResponse(String endpoint,String token,JSONObject payload) throws Exception {
+        URL configured=new URL(endpoint);
+        if(!configured.getProtocol().equals("https")||configured.getUserInfo()!=null||configured.getHost().isBlank()||configured.getQuery()!=null||configured.getRef()!=null)
+            throw new IllegalArgumentException("An HTTPS AI server is required");
+        URL url=new URL(configured,"/chat");
+        HttpsURLConnection conn=(HttpsURLConnection)url.openConnection();
+        conn.setConnectTimeout(15000);conn.setReadTimeout(45000);conn.setInstanceFollowRedirects(false);
+        conn.setRequestMethod("POST");conn.setRequestProperty("Content-Type","application/json");conn.setRequestProperty("Authorization","Bearer "+token);conn.setDoOutput(true);
+        try {
+            try(var out=conn.getOutputStream()){out.write(payload.toString().getBytes(StandardCharsets.UTF_8));}
+            if(conn.getResponseCode()!=200)throw new IllegalStateException("AI connection unavailable");
+            try(var in=conn.getInputStream();var bytes=new java.io.ByteArrayOutputStream()) {
+                byte[] buffer=new byte[2048];int n;
+                while((n=in.read(buffer))!=-1){if(bytes.size()+n>32768)throw new IllegalStateException("Response too large");bytes.write(buffer,0,n);}
+                JSONObject result=new JSONObject(bytes.toString("UTF-8"));String reply=result.getString("reply");
+                if(reply.isBlank()||reply.length()>6000)throw new IllegalStateException("Invalid reply");
+                if(result.optJSONObject("proposal")!=null)CoachProposal.validate(result.getJSONObject("proposal"));
+                return result;
+            }
+        } finally {conn.disconnect();}
+    }
     static Map<String,String> explain(String endpoint,String token,JSONObject payload) throws Exception {
         URL url=new URL(endpoint);
         if(!url.getProtocol().equals("https") || url.getUserInfo()!=null || url.getHost().isBlank() || url.getQuery()!=null || url.getRef()!=null)

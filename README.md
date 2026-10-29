@@ -1,6 +1,8 @@
-# Prardhana — connected Android pilot
+# Paynotes — local spending picture
 
-Local-first expense tracking, recurring-payment candidates, financial events and an opt-in development feedback service. Version **0.6.3 / parser 8** is a development build, not a verified financial ledger or fraud service.
+Local-first spending tracking with Overview, Activity, Insights and Settings. Version **0.7.0 / parser 8** redesigns the current Android screens around period comparisons, payment filters and an optional conversational assistant. Onboarding and account creation remain deferred. This is a development pilot, not a complete bank ledger.
+
+See the [redesign and sequenced MVP roadmap](docs/PAYNOTES_REDESIGN.md) and [design system and research](DESIGN.md). Local summaries work offline; open-ended AI requires the updated HTTPS server with its new `/chat` route.
 
 Transactions now live in indexed SQLite. Legacy preferences migrate with reviewed corrections preserved. Pending/failed payments stay outside spending. Testers can enroll over HTTPS and report masked message formats without connecting phones to a laptop. No raw SMS, merchant names, amounts, accounts or payment references are uploaded to the pilot admin.
 
@@ -49,6 +51,7 @@ See **[v0.6 setup and limits](docs/V06_PILOT.md)** for tester steps, consent/del
 ./gradlew.bat testDebugUnitTest assembleDebug lintDebug
 node tests/admin.test.cjs
 node tests/ai-server.test.cjs
+node tests/chat-server.test.cjs
 node tests/pilot-server.test.cjs
 ```
 
@@ -60,7 +63,21 @@ Host Android tests use Robolectric and require first-run Maven downloads. They c
 - Recurring payments includes weekly through annual candidates and variable amounts. Confirmation is a local annotation; it does not cancel a provider mandate. One merchant can bill multiple products. The older reviewed-monthly Insights remains available too.
 - Reconciliation requires a shared reference, amount and compatible account evidence. Ambiguous reminders, partial refunds, pay-later purchases/settlements and legacy duplicates still need review. A forecast or mandate ceiling is not a confirmed bill.
 - Payment checks are review prompts, not proof of fraud. Unsupported formats/sources can be missed. Sender headers provide context, not authentication.
-- Financial metadata stays on the phone; optional AI receives previewed numerical findings. The private research exports in clauds work are never uploaded.
+- Financial metadata stays on the phone; optional AI receives previewed findings or conversation, plan, goal, preferences and category totals. The private research exports in clauds work are never uploaded.
 - Server IDs represent installations, not unique people. Reset/reinstall may require new enrollment. Sharing is opt-in. Local deletion does not remove earlier server uploads; use Delete shared pilot data first.
 
 Android references: https://developer.android.com/reference/android/service/notification/NotificationListenerService and https://support.google.com/googleplay/android-developer/answer/9888170.
+
+## 0.8.1 validation and testing setup
+
+The warning cleanup passes Android lint with zero errors and zero warnings, 56 Android unit tests, and eight AI server tests with simulated provider responses. The signed update is `artifacts/paynotes-0.8.1.apk` (version code 12).
+
+UI strings and plural labels now use resources, drawing objects are reused, custom views support tooling constructors, and backup exclusions are explicit. Preference writes use asynchronous persistence where appropriate; required durable writes are checked and restricted to background threads. Two narrowly documented lint exceptions remain: intentional durable commits and a launcher-owned widget background that lint incorrectly treats as an Activity overdraw. No blanket warning suppression or baseline was added.
+
+`scripts/ai-test.ps1` runs synthetic live-provider checks after secure OpenAI key setup; `-Serve` starts the local AI service. Provider credentials stay on the server. Live API verification is pending: the local key destination was declined, so no key was created or written and no live request was sent. Passing simulated-provider tests does not establish live model behavior.
+
+## Paynotes 0.8 coaching
+
+Overview now includes an editable payday plan. Insights supports voice-to-draft, offline spoken replies, goals, contribution/withdrawal records and category limits. Optional AI receives previewed plan context and can propose typed goal/limit drafts; users review and confirm changes locally. Activity supports personal shares and linked repayments/refunds. See [coaching implementation and limits](docs/PAYNOTES_COACH.md).
+
+Build the disposable-emulator journey runner with `gradlew assembleDebugAndroidTest "-PpilotRunner=in.prardhana.app.CoachJourneyChecks"`; run it only on an emulator. Live AI requires the HTTPS server and provider credentials. Voice availability depends on installed device services.
